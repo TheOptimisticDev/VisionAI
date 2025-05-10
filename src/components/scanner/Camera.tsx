@@ -137,4 +137,3 @@ export const Camera: React.FC<CameraProps> = ({
     </div>
   );
 };
-

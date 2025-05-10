@@ -14,7 +14,7 @@ export function BottomNavigation() {
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-50 dark:bg-gray-900 dark:border-gray-800">
+    <div className="fixed bottom-0 left-0 rounded-2xl right-0 bg-white border-t shadow-lg z-50 dark:bg-gray-900 dark:border-gray-800">
       <div className="container mb-2 mx-auto px-4">
         <div className="flex justify-around items-center h-16">
           <Link 
