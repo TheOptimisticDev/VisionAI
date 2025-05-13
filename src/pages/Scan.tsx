@@ -1,361 +1,220 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { MainLayout } from '@/components/layout/MainLayout';
-import { Camera } from '@/components/scanner/Camera';
-import { ScanResult } from '@/components/scanner/ScanResult';
-import { ItemDetailsModal } from '@/components/scanner/ItemDetailsModal';
-import { useAuth } from '@/context/AuthContext';
-import { useSubscription } from '@/context/SubscriptionContext';
-import { 
-  PredictionResult, 
-  EmotionResult,
-  PoseResult,
-  ItemDetails, 
-  classifyImage, 
-  getItemDetails, 
-  loadModelWithProgress, 
-  trainModelWithNewData
-} from '@/services/aiService';
-import { getImageFromDataUrl } from '@/utils/cameraUtils';
-import { saveToHistory } from '@/services/historyService';
+import Scanner from '@/components/scanner/Scanner';
+import { initializeObjectDetection } from '@/utils/objectDetection';
 import { useToast } from '@/hooks/use-toast';
+import { AlertCircle, Info } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { Progress } from '@/components/ui/progress';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
+import { Sparkles, Camera as CameraIcon } from "lucide-react";
+import { MainLayout } from '@/components/layout/MainLayout';
 import { ParticleBackground } from '@/components/effects/ParticleBackground';
-import { TrainingDialog } from '@/components/scanner/TrainingDialog';
-import { EmotionVisualization } from '@/components/scanner/EmotionVisualization'; // Ensure this file exists or update the path
-import { PoseVisualization } from '@/components/scanner/PoseVisualization';
 
 const Scan = () => {
-  const { currentUser } = useAuth();
-  const { 
-    subscriptionStatus, 
-    remainingScans, 
-    decrementScans, 
-    shouldShowSubscription, 
-    setShouldShowSubscription 
-  } = useSubscription();
-  const navigate = useNavigate();
   const { toast } = useToast();
-  
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [predictions, setPredictions] = useState<PredictionResult[]>([]);
-  const [emotions, setEmotions] = useState<EmotionResult[]>([]);
-  const [poses, setPoses] = useState<PoseResult[]>([]);
-  const [selectedItem, setSelectedItem] = useState<ItemDetails | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isModelLoading, setIsModelLoading] = useState(true);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState(0);
-  const [showTrainingDialog, setShowTrainingDialog] = useState(false);
-  const [trainingClassName, setTrainingClassName] = useState('');
-  const [analysisMode, setAnalysisMode] = useState<'object' | 'emotion' | 'pose'>('object');
-
-  useEffect(() => {
-    if (shouldShowSubscription) {
-      navigate('/subscription');
-    }
-  }, [shouldShowSubscription, navigate]);
+  const [attemptCount, setAttemptCount] = useState(0);
+  const isMobile = useIsMobile();
+  const [isHovering, setIsHovering] = useState(false);
 
   useEffect(() => {
     const initModel = async () => {
       try {
-        await loadModelWithProgress((progress) => {
-          setLoadingProgress(progress);
-        });
-        setIsModelLoading(false);
-      } catch (error) {
-        console.error('Failed to load AI model:', error);
+        setIsInitializing(true);
+        setModelError(null);
+        setLoadingProgress(0);
+
+        const originalConsoleLog = console.log;
+        console.log = (message) => {
+          originalConsoleLog(message);
+          if (typeof message === 'string' && message.includes('Loading model:')) {
+            const match = message.match(/Loading model: (\d+)%/);
+            if (match && match[1]) {
+              const progress = parseInt(match[1]);
+              if (!isNaN(progress) && progress >= 0 && progress <= 100) {
+                setLoadingProgress(progress);
+              }
+            }
+          }
+        };
+
+        await initializeObjectDetection();
+        console.log = originalConsoleLog;
+
         toast({
-          title: "AI Model Failed to Load",
-          description: "There was a problem loading the AI model. Please try refreshing the page.",
-          variant: "destructive",
+          title: 'Ready to scan',
+          description: 'Object detection initialized successfully.',
+          variant: 'default',
         });
+      } catch (error: any) {
+        console.error('Failed to initialize object detection model:', error);
+        const errorMessage = error.message || 'Failed to load the object detection model.';
+        setModelError(errorMessage);
+        toast({
+          title: 'Initialization Failed',
+          description: 'Unable to initialize object detection. You may need to use a different browser or device.',
+          variant: 'destructive',
+        });
+      } finally {
+        setIsInitializing(false);
       }
     };
-    
+
     initModel();
-  }, []);
 
-  const handleCapture = async (imageDataUrl: string) => {
-    if (!currentUser && remainingScans <= 0) {
-      toast({
-        title: "Scan Limit Reached",
-        description: "Sign in to continue scanning or subscribe for unlimited scans.",
-        variant: "destructive",
-      });
-      navigate('/auth');
-      return;
-    } else if (subscriptionStatus === 'none' && remainingScans <= 0) {
-      setShouldShowSubscription(true);
-      return;
-    }
-    
-    setCapturedImage(imageDataUrl);
-    setIsAnalyzing(true);
-    
-    try {
-      const imageElement = await getImageFromDataUrl(imageDataUrl);
-      const { objects, emotions, poses } = await classifyImage(imageElement);
-      
-      setPredictions(objects);
-      setEmotions(emotions);
-      setPoses(poses);
-      
-      if (subscriptionStatus === 'none') {
-        decrementScans();
+    return () => {
+      if (console.log.toString().includes('Loading model:')) {
+        console.log = console.log;
       }
-      
-      if (objects.length > 0 && objects[0].probability > 0.7) {
-        handleSelectItem(objects[0].className, imageDataUrl);
-      }
-    } catch (error) {
-      console.error('Failed to analyze image:', error);
-      toast({
-        title: "Analysis Failed",
-        description: "There was a problem analyzing your image. Please try again.",
-        variant: "destructive",
-      });
-      setPredictions([]);
-      setEmotions([]);
-      setPoses([]);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
+    };
+  }, [toast, attemptCount]);
 
-  const handleSelectItem = async (className: string, imageDataUrl?: string) => {
-    try {
-      const details = await getItemDetails(
-        className, 
-        imageDataUrl || capturedImage || undefined
-      );
-      setSelectedItem(details);
-      setIsModalOpen(true);
-      
-      if (currentUser && capturedImage) {
-        const selectedPrediction = predictions.find(p => p.className === className);
-        if (selectedPrediction) {
-          await saveToHistory(
-            currentUser.uid,
-            capturedImage,
-            details.name,
-            selectedPrediction.probability,
-            emotions,
-            poses
-          );
-        }
-      }
-    } catch (error) {
-      console.error('Failed to get item details:', error);
-      toast({
-        title: "Error",
-        description: "Failed to retrieve item details. Please try again.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleTrainModel = async (className: string, isCorrect: boolean) => {
-    if (!capturedImage) return;
-    
-    try {
-      const imageElement = await getImageFromDataUrl(capturedImage);
-      await trainModelWithNewData(imageElement, className, isCorrect);
-      
-      toast({
-        title: "Model Updated",
-        description: `The AI has been ${isCorrect ? 'trained' : 'corrected'} with this example.`,
-      });
-      
-      if (!isCorrect) {
-        setIsAnalyzing(true);
-        const { objects } = await classifyImage(imageElement);
-        setPredictions(objects);
-        setIsAnalyzing(false);
-      }
-    } catch (error) {
-      console.error('Training failed:', error);
-      toast({
-        title: "Training Failed",
-        description: "There was a problem updating the AI model.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setSelectedItem(null);
-  };
-
-  const handleStartOver = () => {
-    setCapturedImage(null);
-    setPredictions([]);
-    setEmotions([]);
-    setPoses([]);
-    setSelectedItem(null);
-  };
-
-  const renderContent = () => {
-    if (!currentUser && remainingScans <= 0) {
-      return (
-        <div className="text-center my-12 max-w-md mx-auto p-6 bg-white rounded-xl shadow-sm animate-fade-in">
-          <h2 className="text-xl font-semibold mb-3">Scan Limit Reached</h2>
-          <p className="text-muted-foreground mb-6">
-            Sign in to continue scanning or subscribe for unlimited scans.
-          </p>
-          <div className="flex justify-center space-x-4">
-            <Button 
-              variant="outline" 
-              onClick={() => navigate('/auth')}
-              className="transition-all duration-200 transform hover:scale-105"
-            >
-              Sign In
-            </Button>
-            <Button 
-              onClick={() => navigate('/subscription')}
-              className="transition-all duration-200 transform hover:scale-105 bg-brand-600 hover:bg-brand-700"
-            >
-              Subscribe
-            </Button>
-          </div>
-        </div>
-      );
-    }
-  
-    return (
-      <div className="space-y-8 mt-8 animate-fade-in">
-        {subscriptionStatus === 'none' && (
-          <div className="bg-brand-50 border border-brand-200 rounded-lg p-4 mb-4 animate-fade-in">
-            <p className="text-center">
-              <span className="font-small text-black">Remaining free scans: {remainingScans}</span>
-              {remainingScans <= 1 && (
-                <Button 
-                  variant="link" 
-                  onClick={() => navigate('/subscription')}
-                  className="ml-2 text-brand-600 p-0 h-auto transition-all duration-200"
-                >
-                  Upgrade now
-                </Button>
-              )}
-            </p>
-          </div>
-        )}
-        
-        {capturedImage ? (
-          <div className="space-y-6 animate-fade-in">
-            <div className="flex justify-center space-x-4">
-              <Button 
-                variant={analysisMode === 'object' ? 'default' : 'outline'}
-                onClick={() => setAnalysisMode('object')}
-              >
-                Objects
-              </Button>
-              <Button 
-                variant={analysisMode === 'emotion' ? 'default' : 'outline'}
-                onClick={() => setAnalysisMode('emotion')}
-                disabled={emotions.length === 0}
-              >
-                Emotions ({emotions.length})
-              </Button>
-              <Button 
-                variant={analysisMode === 'pose' ? 'default' : 'outline'}
-                onClick={() => setAnalysisMode('pose')}
-                disabled={poses.length === 0}
-              >
-                Poses ({poses.length})
-              </Button>
-            </div>
-
-            {analysisMode === 'object' && (
-              <ScanResult 
-                predictions={predictions} 
-                onSelectItem={(className) => handleSelectItem(className, capturedImage)} 
-                isLoading={isAnalyzing}
-              />
-            )}
-
-            {analysisMode === 'emotion' && emotions.length > 0 && (
-              <EmotionVisualization 
-                image={capturedImage}
-                emotions={emotions}
-              />
-            )}
-
-            {analysisMode === 'pose' && poses.length > 0 && (
-              <PoseVisualization 
-                image={capturedImage}
-                poses={poses}
-              />
-            )}
-
-            <div className="flex justify-center space-x-4">
-              <Button 
-                variant="outline" 
-                onClick={handleStartOver}
-                className="transition-all duration-200 transform hover:scale-105"
-              >
-                Scan Another Item
-              </Button>
-              {predictions.length > 0 && (
-                <Button 
-                  variant="secondary"
-                  onClick={() => {
-                    setTrainingClassName(predictions[0].className);
-                    setShowTrainingDialog(true);
-                  }}
-                >
-                  Improve Recognition
-                </Button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <Camera onCapture={handleCapture} />
-        )}
-        
-        <ItemDetailsModal 
-          isOpen={isModalOpen} 
-          onClose={handleCloseModal} 
-          itemDetails={selectedItem}
-          scannedImage={capturedImage}
-          onTrainModel={(className, isCorrect) => {
-            handleTrainModel(className, isCorrect);
-            handleCloseModal();
-          }}
-        />
-        
-        <TrainingDialog
-          isOpen={showTrainingDialog}
-          onClose={() => setShowTrainingDialog(false)}
-          className={trainingClassName}
-          onConfirm={(className, isCorrect) => {
-            handleTrainModel(className, isCorrect);
-            setShowTrainingDialog(false);
-          }}
-        />
-      </div>
-    );
+  const handleRetry = () => {
+    setAttemptCount(prev => prev + 1);
   };
 
   return (
     <MainLayout>
-      <ParticleBackground />
-      <div className="max-w-4xl mx-auto">
-        {isModelLoading ? (
-          <div className="text-center my-12">
-            <h2 className="text-xl font-semibold mb-4">Loading AI Model</h2>
-            <div className="w-full bg-gray-200 rounded-full h-2.5 max-w-md mx-auto">
-              <div 
-                className="bg-brand-600 h-2.5 rounded-full" 
-                style={{ width: `${loadingProgress}%` }}
-              ></div>
-            </div>
-            <p className="text-muted-foreground mt-2">
-              {Math.floor(loadingProgress)}% complete
+      <div className="relative w-full min-h-screen bg-gray-900 overflow-hidden">
+        <ParticleBackground />
+
+                  <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.5 }}
+          >
+            {isInitializing ? (
+              <div className="text-center py-12">
+                {loadingProgress > 0 ? (
+                  <>
+                    <Progress
+                      value={loadingProgress}
+                      className="mb-4 h-2 bg-gray-700"
+                    />
+                    <motion.p
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: 0.1 }}
+                      className="text-gray-300"
+                    >
+                      Initializing object detection... {loadingProgress}%
+                    </motion.p>
+                  </>
+                ) : (
+                  <>
+                    <motion.div
+                      className="flex justify-center mb-4"
+                      animate={{ rotate: 360 }}
+                      transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                    >
+                      <div className="rounded-full h-8 w-8 border-b-2 border-brand-400"></div>
+                    </motion.div>
+                    <motion.p
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: 0.2 }}
+                      className="text-gray-300"
+                    >
+                      Preparing object detection...
+                    </motion.p>
+                  </>
+                )}
+                <motion.p
+                  className="text-sm text-gray-500 mt-2"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.3 }}
+                >
+                  This may take a moment depending on your device and internet speed
+                </motion.p>
+              </div>
+            ) : (
+              <Scanner />
+            )}
+          </motion.div>
+
+        <motion.main
+          className="container mx-auto px-4 py-8"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.3 }}
+        >
+          {modelError ? (
+            <Alert className="mb-6">
+              <AlertCircle className="h-4 w-4 text-red-400" />
+              <AlertTitle className="text-white">Detection Error</AlertTitle>
+              <AlertDescription className="text-gray-300">
+                {modelError}
+                <div className="mt-3">
+                  <p className="text-sm mb-2 text-gray-400">This application requires WebGPU, WebAssembly, or WebGL support. Try:</p>
+                  <ul className="list-disc pl-5 text-sm text-gray-400">
+                    <li>Using a device with better hardware support</li>
+                    <li>Enabling hardware acceleration in your browser settings</li>
+                  </ul>
+                  <motion.div
+                    className="mt-3"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <Button
+                      onClick={handleRetry}
+                      className="px-4 py-2 bg-gradient-to-r from-brand-500 to-purple-500 text-white rounded-md hover:from-brand-600 hover:to-purple-600 transition-colors shadow-lg"
+                      onMouseEnter={() => setIsHovering(true)}
+                      onMouseLeave={() => setIsHovering(false)}
+                    >
+                      <span className="relative z-10 flex items-center">
+                        <CameraIcon className="mr-2" size={18} />
+                        Retry Initialization
+                      </span>
+                      <AnimatePresence>
+                        {isHovering && (
+                          <motion.span
+                            className="absolute inset-0 bg-gradient-to-r from-brand-600 to-purple-600 opacity-0 hover:opacity-100 transition-opacity duration-300 rounded-md"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                          />
+                        )}
+                      </AnimatePresence>
+                    </Button>
+                  </motion.div>
+                </div>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {!modelError && !isInitializing && (
+            <motion.div>
+              <Alert className="mb-6">
+                <Info className="h-4 w-4 text-blue-400" />
+                <AlertTitle className="text-white">Ready to Scan</AlertTitle>
+                <AlertDescription className="text-gray-300">
+                  {isMobile
+                    ? "Your device is ready for scanning. Point your camera at an object to identify it. Tap the screen to focus."
+                    : "For best results, ensure the object is clearly visible and well-lit when scanning. You can tap the video to focus."}
+                </AlertDescription>
+              </Alert>
+            </motion.div>
+          )}
+
+
+
+          <motion.div
+            className="mt-8 text-center text-sm text-gray-400"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.6 }}
+          >
+            <p>
+              This application uses AI to identify objects in images.<br />
+              Simply take a photo or upload an image to get started.
             </p>
-          </div>
-        ) : renderContent()}
+          </motion.div>
+        </motion.main>
       </div>
     </MainLayout>
   );

@@ -2,80 +2,76 @@
 import React from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { PredictionResult } from '@/services/aiService';
-import { useToast } from '@/hooks/use-toast';
+import { Badge } from '@/components/ui/badge';
+import { ObjectDetectionResult } from '@/utils/objectDetection';
 
 interface ScanResultProps {
-  predictions: PredictionResult[];
-  onSelectItem: (className: string) => void;
-  isLoading: boolean;
+  result: {
+    detections: ObjectDetectionResult[];
+    imageUrl: string;
+    info: string | null;
+    selectedObject: string | null;
+  };
+  onSelectObject: (label: string) => Promise<void>;
 }
 
-export function ScanResult({ predictions, onSelectItem, isLoading }: ScanResultProps) {
-  const { toast } = useToast();
+const ScanResult: React.FC<ScanResultProps> = ({ result, onSelectObject }) => {
+  const { detections, imageUrl, info, selectedObject } = result;
 
-  if (isLoading) {
-    return (
-      <Card className="w-full max-w-xl mx-auto animate-pulse">
+  const formatConfidence = (score: number): string => {
+    return `${(score * 100).toFixed(1)}%`;
+  };
+
+  const formatLabel = (label: string): string => {
+    return label.split(',')[0].trim();
+  };
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-black flex items-center justify-center p-2">
+          <img 
+            src={imageUrl} 
+            alt="Scanned object" 
+            className="max-h-96 object-contain"
+          />
+        </div>
+        
         <CardContent className="p-6">
-          <div className="space-y-4">
-            <div className="h-6 bg-muted rounded w-3/4"></div>
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center justify-between">
-                  <div className="h-4 bg-muted rounded w-1/2"></div>
-                  <div className="h-4 bg-muted rounded w-16"></div>
-                </div>
+          <h3 className="text-2xl font-bold mb-4">
+            {selectedObject ? formatLabel(selectedObject) : 'Object Detected'}
+          </h3>
+          
+          <div className="mb-6">
+            <h4 className="text-sm text-gray-500 uppercase tracking-wide mb-2">Detected Objects</h4>
+            <div className="flex flex-wrap gap-2">
+              {detections.map((detection, index) => (
+                <Button 
+                  key={index}
+                  variant={detection.label === selectedObject ? "default" : "outline"} 
+                  size="sm"
+                  onClick={() => onSelectObject(detection.label)}
+                  className="flex items-center gap-2"
+                >
+                  {formatLabel(detection.label)}
+                  <Badge variant="secondary" className="text-xs">
+                    {formatConfidence(detection.score)}
+                  </Badge>
+                </Button>
               ))}
             </div>
           </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (!predictions.length) {
-    return (
-      <Card className="w-full max-w-xl mx-auto">
-        <CardContent className="p-6">
-          <div className="text-center py-4">
-            <h3 className="text-lg font-medium">No items detected</h3>
-            <p className="text-muted-foreground text-sm mt-2">
-              Try scanning again with better lighting or a clearer image.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <Card className="w-full max-w-xl mx-auto animate-fade-in">
-      <CardContent className="p-6">
-        <h3 className="text-lg font-medium mb-4">We found these items:</h3>
-        <div className="space-y-3">
-          {predictions.map((pred, index) => (
-            <div 
-              key={index}
-              className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 transition-colors"
-            >
-              <div className="flex-1">
-                <p className="font-medium">{pred.className.split(',')[0]}</p>
-                <p className="text-xs text-muted-foreground">
-                  {Math.round(pred.probability * 100)}% confidence
-                </p>
-              </div>
-              <Button 
-                variant="secondary"
-                size="sm"
-                onClick={() => onSelectItem(pred.className)}
-              >
-                View Details
-              </Button>
+          
+          {info && (
+            <div>
+              <h4 className="text-sm text-gray-500 uppercase tracking-wide mb-2">Information</h4>
+              <p className="text-gray-700">{info}</p>
             </div>
-          ))}
-        </div>
-      </CardContent>
+          )}
+        </CardContent>
+      </div>
     </Card>
   );
-}
+};
+
+export default ScanResult;
